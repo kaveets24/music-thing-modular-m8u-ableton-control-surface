@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Controlled Retro Wireframe Visuals</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: monospace;
+            color: #0f0;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border: 1px solid #0f0;
+            z-index: 10;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 16px;
+        }
+        .status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: red;
+            border-radius: 50%;
+            margin-left: 10px;
+        }
+        .connected {
+            background-color: #0f0;
+        }
+        .cc-value {
+            display: inline-block;
+            width: 30px;
+            text-align: right;
+        }
+        button {
+            background-color: #000;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-family: monospace;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0f0;
+            color: #000;
+        }
+        #message {
+            margin-top: 10px;
+            color: #0f0;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="controls">
+        <div class="control-group">
+            <h2>MIDI Status <span id="midi-status" class="status"></span></h2>
+            <div id="message">Connect a MIDI controller and use CCs 35-41</div>
+            <button id="midi-button">Request MIDI Access</button>
+        </div>
+        
+        <div class="control-group">
+            <h2>Controls:</h2>
+            <div>CC 35: Rotation Speed <span id="cc35-value" class="cc-value">0</span></div>
+            <div>CC 36: Grid Size <span id="cc36-value" class="cc-value">0</span></div>
+            <div>CC 37: Pulse Rate <span id="cc37-value" class="cc-value">0</span></div>
+            <div>CC 38: Line Width <span id="cc38-value" class="cc-value">0</span></div>
+            <div>CC 39: Perspective <span id="cc39-value" class="cc-value">0</span></div>
+            <div>CC 40: Color Hue <span id="cc40-value" class="cc-value">0</span></div>
+            <div>CC 41: Shape Type <span id="cc41-value" class="cc-value">0</span></div>
+        </div>
+    </div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size to window size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // MIDI Controls (initial values)
+        const controls = {
+            rotationSpeed: 0.5,   // CC 35 - Controls camera rotation speed
+            gridSize: 15,         // CC 36 - Controls terrain resolution/detail 
+            pulseRate: 0.5,       // CC 37 - Controls mountain height pulsing rate
+            lineWidth: 1,         // CC 38 - Controls wireframe line thickness
+            perspective: 0.8,     // CC 39 - Controls terrain perspective/tilt
+            colorHue: 120,        // CC 40 - Controls wireframe color hue
+            shapeType: 0,         // CC 41 - Controls terrain type (mountains, range, grid, valley)
+        };
+        
+        // Animation variables
+        let time = 0;
+        let angle = 0;
+        let pulse = 0;
+        
+        // MIDI Setup
+        const midiStatusEl = document.getElementById('midi-status');
+        const midiButton = document.getElementById('midi-button');
+        const messageEl = document.getElementById('message');
+        
+        // CC value display elements
+        const ccValueElements = {
+            35: document.getElementById('cc35-value'),
+            36: document.getElementById('cc36-value'),
+            37: document.getElementById('cc37-value'),
+            38: document.getElementById('cc38-value'),
+            39: document.getElementById('cc39-value'),
+            40: document.getElementById('cc40-value'),
+            41: document.getElementById('cc41-value')
+        };
+        
+        // MIDI access request
+        midiButton.addEventListener('click', requestMIDIAccess);
+        
+        function requestMIDIAccess() {
+            if (navigator.requestMIDIAccess) {
+                navigator.requestMIDIAccess()
+                    .then(onMIDISuccess, onMIDIFailure);
+                messageEl.textContent = "Waiting for MIDI access...";
+            } else {
+                messageEl.textContent = "WebMIDI not supported in this browser.";
+            }
+        }
+        
+        function onMIDISuccess(midiAccess) {
+            midiStatusEl.classList.add('connected');
+            messageEl.textContent = "MIDI connected! Use CCs 35-41 to control visuals.";
+            
+            // Listen to MIDI input
+            const inputs = midiAccess.inputs.values();
+            for (let input = inputs.next(); input && !input.done; input = inputs.next()) {
+                input.value.onmidimessage = onMIDIMessage;
+            }
+            
+            midiAccess.onstatechange = function(e) {
+                if (e.port.state === 'connected') {
+                    midiStatusEl.classList.add('connected');
+                    messageEl.textContent = "MIDI device connected!";
+                } else {
+                    midiStatusEl.classList.remove('connected');
+                    messageEl.textContent = "MIDI device disconnected!";
+                }
+            };
+        }
+        
+        function onMIDIFailure(msg) {
+            messageEl.textContent = "Failed to get MIDI access: " + msg;
+        }
+        
+        function onMIDIMessage(message) {
+            // Check if it's a Control Change message (0xB0)
+            if ((message.data[0] & 0xF0) === 0xB0) {
+                const channel = message.data[0] & 0x0F;
+                const ccNumber = message.data[1];
+                const value = message.data[2];
+                
+                // Update controls based on CC numbers 35-41
+                switch (ccNumber) {
+                    case 35:
+                        controls.rotationSpeed = value / 127 * 2; // 0-2
+                        ccValueElements[35].textContent = value;
+                        break;
+                    case 36:
+                        controls.gridSize = 5 + (value / 127 * 25); // 5-30
+                        ccValueElements[36].textContent = value;
+                        break;
+                    case 37:
+                        controls.pulseRate = value / 127 * 2; // 0-2
+                        ccValueElements[37].textContent = value;
+                        break;
+                    case 38:
+                        controls.lineWidth = 0.5 + (value / 127 * 5); // 0.5-5.5
+                        ccValueElements[38].textContent = value;
+                        break;
+                    case 39:
+                        controls.perspective = 0.1 + (value / 127 * 1.5); // 0.1-1.6
+                        ccValueElements[39].textContent = value;
+                        break;
+                    case 40:
+                        controls.colorHue = value / 127 * 360; // 0-360
+                        ccValueElements[40].textContent = value;
+                        break;
+                    case 41:
+                        controls.shapeType = Math.floor(value / 32); // 0-3 (4 shape types)
+                        ccValueElements[41].textContent = value;
+                        break;
+                }
+            }
+        }
+        
+        // Animation functions
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Clear canvas
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Update time and angles
+            time += 0.01;
+            angle += 0.01 * controls.rotationSpeed;
+            pulse = Math.sin(time * controls.pulseRate) * 0.5 + 0.5;
+            
+            // Set line style based on controls
+            ctx.lineWidth = controls.lineWidth;
+            
+            // Create base color from hue
+            const hue = controls.colorHue;
+            const baseColor = `hsl(${hue}, 100%, 50%)`;
+            
+            // Set line stroke color
+            ctx.strokeStyle = baseColor;
+            
+            // Draw the 3D shapes
+            drawShape();
+        }
+        
+        function drawShape() {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const size = Math.min(canvas.width, canvas.height) * 0.4;
+            const count = Math.round(controls.gridSize);
+            
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            
+            // Choose shape based on shapeType control
+            switch (controls.shapeType) {
+                case 0:
+                    drawMountains(size, count);
+                    break;
+                case 1:
+                    drawMountainRange(size, count);
+                    break;
+                case 2:
+                    drawTerrainGrid(size, count);
+                    break;
+                case 3:
+                    drawValleyTerrain(size, count);
+                    break;
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawMountains(size, count) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // 3D rotations - tilt forward to see mountains from above
+            ctx.rotate(angle * 0.5);
+            ctx.scale(1, controls.perspective); // Apply perspective squashing
+            
+            // Create mountain heightmap using perlin-like noise
+            const gridSize = Math.max(5, Math.floor(count));
+            const spacing = pulseSize * 2 / gridSize;
+            
+            // Draw wireframe terrain
+            for (let z = -gridSize / 2; z <= gridSize / 2; z++) {
+                ctx.beginPath();
+                for (let x = -gridSize / 2; x <= gridSize / 2; x++) {
+                    // Generate mountain height using sin functions for a noise-like effect
+                    const fx = x / gridSize * 10;
+                    const fz = z / gridSize * 10;
+                    const height = 
+                        Math.sin(fx * 0.5 + time) * Math.cos(fz * 0.3 + time * 0.7) * 0.5 +
+                        Math.sin(fx * 1.3 + time * 0.7) * Math.cos(fz * 0.8 + time * 0.5) * 0.3 +
+                        Math.sin(fx * 2.1 + time * 0.3) * Math.cos(fz * 1.5 + time * 0.2) * 0.2;
+                    
+                    // Scale height based on pulse
+                    const mountainHeight = height * pulseSize * 0.5;
+                    
+                    // Calculate 3D position
+                    const xPos = x * spacing;
+                    const yPos = mountainHeight;
+                    const zPos = z * spacing;
+                    
+                    // Apply 3D rotation
+                    const rotX = xPos;
+                    const rotZ = zPos * Math.cos(angle * 0.5) - yPos * Math.sin(angle * 0.5);
+                    const rotY = zPos * Math.sin(angle * 0.5) + yPos * Math.cos(angle * 0.5);
+                    
+                    // Calculate depth for color intensity
+                    const depth = 1 + rotZ / pulseSize; // normalize to 0-2 range
+                    
+                    // Move or draw line
+                    if (x === -gridSize / 2) {
+                        ctx.moveTo(rotX, rotY);
+                    } else {
+                        ctx.lineTo(rotX, rotY);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            // Draw lines in the other direction for grid effect
+            for (let x = -gridSize / 2; x <= gridSize / 2; x++) {
+                ctx.beginPath();
+                for (let z = -gridSize / 2; z <= gridSize / 2; z++) {
+                    // Generate mountain height using sin functions for a noise-like effect
+                    const fx = x / gridSize * 10;
+                    const fz = z / gridSize * 10;
+                    const height = 
+                        Math.sin(fx * 0.5 + time) * Math.cos(fz * 0.3 + time * 0.7) * 0.5 +
+                        Math.sin(fx * 1.3 + time * 0.7) * Math.cos(fz * 0.8 + time * 0.5) * 0.3 +
+                        Math.sin(fx * 2.1 + time * 0.3) * Math.cos(fz * 1.5 + time * 0.2) * 0.2;
+                    
+                    // Scale height based on pulse
+                    const mountainHeight = height * pulseSize * 0.5;
+                    
+                    // Calculate 3D position
+                    const xPos = x * spacing;
+                    const yPos = mountainHeight;
+                    const zPos = z * spacing;
+                    
+                    // Apply 3D rotation
+                    const rotX = xPos;
+                    const rotZ = zPos * Math.cos(angle * 0.5) - yPos * Math.sin(angle * 0.5);
+                    const rotY = zPos * Math.sin(angle * 0.5) + yPos * Math.cos(angle * 0.5);
+                    
+                    // Calculate depth for color intensity
+                    const depth = 1 + rotZ / pulseSize; // normalize to 0-2 range
+                    
+                    // Move or draw line
+                    if (z === -gridSize / 2) {
+                        ctx.moveTo(rotX, rotY);
+                    } else {
+                        ctx.lineTo(rotX, rotY);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawMountainRange(size, count) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // Center in the bottom half of the screen for mountain perspective
+            ctx.translate(0, size * 0.5);
+            
+            // Create several mountain ridges
+            const ridgeCount = 5;
+            const ridgeSpacing = pulseSize * 1.5 / ridgeCount;
+            
+            for (let r = 0; r < ridgeCount; r++) {
+                // Each ridge gets smaller as it goes back (perspective)
+                const perspective = 1 - r / ridgeCount * 0.8;
+                const width = pulseSize * 2 * perspective;
+                const height = pulseSize * perspective;
+                const zOffset = r * ridgeSpacing;
+                
+                // Adjust opacity for distance fog effect
+                const opacity = 1 - r / ridgeCount * 0.7;
+                
+                // Get more detailed for closer mountains
+                const segments = Math.max(10, Math.round(count * perspective));
+                
+                // Draw ridge silhouette
+                ctx.beginPath();
+                ctx.moveTo(-width, 0);
+                
+                for (let i = 0; i <= segments; i++) {
+                    const x = -width + i / segments * width * 2;
+                    
+                    // More complex mountain function for interesting shapes
+                    // Use different frequencies for each ridge to vary the look
+                    const freq1 = 0.3 + r * 0.05;
+                    const freq2 = 0.7 - r * 0.03;
+                    const freq3 = 1.1 + r * 0.07;
+                    
+                    // Mountain height calculation with multiple frequencies
+                    let y = 0;
+                    y += Math.sin(x * freq1 + time + r * 1.5) * 0.4;
+                    y += Math.sin(x * freq2 + time * 1.3 + r * 3.7) * 0.3;
+                    y += Math.sin(x * freq3 + time * 0.7 + r * 2.3) * 0.2;
+                    y += Math.sin(x * freq1 * 2 + time * 0.5 + r) * 0.1;
+                    
+                    // Normalize and scale
+                    y = -y * height - zOffset * controls.perspective;
+                    
+                    ctx.lineTo(x, y);
+                }
+                
+                // Complete the mountain silhouette by drawing to the bottom
+                ctx.lineTo(width, 0);
+                
+                // Stroke in ridge color with distance-based opacity
+                ctx.strokeStyle = `hsla(${controls.colorHue}, 100%, 50%, ${opacity})`;
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawTerrainGrid(size, count) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // Rotate and tilt for 3D perspective
+            const tiltAngle = Math.PI / 4; // 45 degrees tilt
+            ctx.rotate(-angle * 0.2);
+            ctx.scale(1, Math.sin(tiltAngle) * controls.perspective);
+            
+            // Create grid parameters
+            const gridSize = Math.max(5, Math.round(count * 1.5));
+            const gridWidth = pulseSize * 2;
+            const gridHeight = pulseSize * 2;
+            const cellWidth = gridWidth / gridSize;
+            const cellHeight = gridHeight / gridSize;
+            
+            // Draw terrain with heightmap
+            for (let y = 0; y <= gridSize; y++) {
+                ctx.beginPath();
+                
+                for (let x = 0; x <= gridSize; x++) {
+                    // Convert to normalized coordinates (-1 to 1)
+                    const nx = (x / gridSize) * 2 - 1;
+                    const ny = (y / gridSize) * 2 - 1;
+                    
+                    // Generate mountain height using multiple frequencies for varied terrain
+                    const mountainHeight = generateTerrainHeight(nx * 3, ny * 3, time);
+                    
+                    // Calculate grid coordinates
+                    const xPos = nx * pulseSize;
+                    const yPos = ny * pulseSize;
+                    
+                    // Apply height to y position - scaled by pulse
+                    const heightOffset = mountainHeight * pulseSize * 0.3;
+                    
+                    // Point position with height
+                    if (x === 0) {
+                        ctx.moveTo(xPos, yPos + heightOffset);
+                    } else {
+                        ctx.lineTo(xPos, yPos + heightOffset);
+                    }
+                }
+                
+                ctx.stroke();
+            }
+            
+            // Draw vertical grid lines 
+            for (let x = 0; x <= gridSize; x++) {
+                ctx.beginPath();
+                
+                for (let y = 0; y <= gridSize; y++) {
+                    // Convert to normalized coordinates (-1 to 1)
+                    const nx = (x / gridSize) * 2 - 1;
+                    const ny = (y / gridSize) * 2 - 1;
+                    
+                    // Generate mountain height using multiple frequencies for varied terrain
+                    const mountainHeight = generateTerrainHeight(nx * 3, ny * 3, time);
+                    
+                    // Calculate grid coordinates
+                    const xPos = nx * pulseSize;
+                    const yPos = ny * pulseSize;
+                    
+                    // Apply height to y position - scaled by pulse
+                    const heightOffset = mountainHeight * pulseSize * 0.3;
+                    
+                    // Point position with height
+                    if (y === 0) {
+                        ctx.moveTo(xPos, yPos + heightOffset);
+                    } else {
+                        ctx.lineTo(xPos, yPos + heightOffset);
+                    }
+                }
+                
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawValleyTerrain(size, count) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // Add more rotation for dramatic effect
+            ctx.rotate(angle * 0.3);
+            
+            // Parameters
+            const valleyWidth = pulseSize * 2;
+            const valleyDepth = pulseSize * 1.5;
+            const segments = Math.max(10, Math.floor(count * 1.5));
+            
+            // Draw curved valley contour lines
+            const contourCount = 15;
+            
+            for (let c = 0; c < contourCount; c++) {
+                const zPosition = (c / (contourCount - 1)) * 2 - 1; // -1 to 1
+                const contourWidth = valleyWidth * (1 - Math.abs(zPosition) * 0.2);
+                const contourDepth = valleyDepth * (1 - Math.abs(zPosition) * 0.2);
+                
+                // Adjust perspective
+                const perspectiveScale = 1 / (1 + (zPosition + 1) * controls.perspective);
+                const zOffset = zPosition * pulseSize * 0.5;
+                
+                // Adjust opacity for distance fog effect
+                const opacity = 1 - (zPosition + 1) / 2 * 0.5;
+                
+                ctx.beginPath();
+                
+                for (let i = 0; i <= segments; i++) {
+                    const t = i / segments;
+                    const angle = t * Math.PI * 2;
+                    
+                    // Valley shape
+                    const x = Math.sin(angle) * contourWidth * perspectiveScale;
+                    
+                    // Valley depth with mountain features
+                    let y = Math.cos(angle) * contourDepth * perspectiveScale;
+                    
+                    // Add mountain features based on angle and contour position
+                    // More peaks on the sides, flatter in the middle (valley floor)
+                    if (Math.abs(Math.sin(angle)) > 0.3) {
+                        // Mountain sides
+                        const mountainNoise = 
+                            Math.sin(angle * 5 + time + c) * 0.1 +
+                            Math.sin(angle * 7 + time * 0.7 + c * 2) * 0.07 +
+                            Math.sin(angle * 13 + time * 0.3 + c * 3) * 0.04;
+                        
+                        y += mountainNoise * pulseSize * perspectiveScale;
+                    }
+                    
+                    // Add perspective offset
+                    y -= zOffset;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                
+                ctx.closePath();
+                ctx.strokeStyle = `hsla(${controls.colorHue}, 100%, 50%, ${opacity})`;
+                ctx.stroke();
+            }
+            
+            // Draw connecting lines from front to back
+            const connectingLines = 10;
+            
+            for (let l = 0; l < connectingLines; l++) {
+                const angle = (l / connectingLines) * Math.PI * 2;
+                const x1 = Math.sin(angle) * valleyWidth;
+                const y1 = Math.cos(angle) * valleyDepth;
+                const x2 = Math.sin(angle) * valleyWidth * 0.8;
+                const y2 = Math.cos(angle) * valleyDepth * 0.8 - pulseSize * 0.5;
+                
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        // Helper function for terrain generation
+        function generateTerrainHeight(x, y, time) {
+            // Multiple frequencies for natural looking terrain
+            let height = 0;
+            
+            // Layer 1: Large features
+            height += Math.sin(x * 0.3 + time * 0.2) * Math.cos(y * 0.3 + time * 0.1) * 0.5;
+            
+            // Layer 2: Medium features
+            height += Math.sin(x * 0.7 + time * 0.3) * Math.cos(y * 0.8 + time * 0.2) * 0.25;
+            
+            // Layer 3: Small details
+            height += Math.sin(x * 1.9 + time * 0.1) * Math.cos(y * 1.2 + time * 0.3) * 0.125;
+            
+            return height;
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>

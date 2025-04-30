@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Controlled Retro Wireframe Visuals</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: monospace;
+            color: #0f0;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border: 1px solid #0f0;
+            z-index: 10;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 16px;
+        }
+        .status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: red;
+            border-radius: 50%;
+            margin-left: 10px;
+        }
+        .connected {
+            background-color: #0f0;
+        }
+        .cc-value {
+            display: inline-block;
+            width: 30px;
+            text-align: right;
+        }
+        button {
+            background-color: #000;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-family: monospace;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0f0;
+            color: #000;
+        }
+        #message {
+            margin-top: 10px;
+            color: #0f0;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="controls">
+        <div class="control-group">
+            <h2>MIDI Status <span id="midi-status" class="status"></span></h2>
+            <div id="message">Connect a MIDI controller and use CCs 35-41</div>
+            <button id="midi-button">Request MIDI Access</button>
+        </div>
+        
+        <div class="control-group">
+            <h2>Controls:</h2>
+            <div>CC 35: Rotation Speed <span id="cc35-value" class="cc-value">0</span></div>
+            <div>CC 36: Grid Size <span id="cc36-value" class="cc-value">0</span></div>
+            <div>CC 37: Pulse Rate <span id="cc37-value" class="cc-value">0</span></div>
+            <div>CC 38: Line Width <span id="cc38-value" class="cc-value">0</span></div>
+            <div>CC 39: Perspective <span id="cc39-value" class="cc-value">0</span></div>
+            <div>CC 40: Color Hue <span id="cc40-value" class="cc-value">0</span></div>
+            <div>CC 41: Shape Type <span id="cc41-value" class="cc-value">0</span></div>
+        </div>
+    </div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size to window size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // MIDI Controls (initial values)
+        const controls = {
+            rotationSpeed: 0.5,  // CC 35
+            gridSize: 15,        // CC 36
+            pulseRate: 0.5,      // CC 37
+            lineWidth: 1,        // CC 38
+            perspective: 0.8,    // CC 39
+            colorHue: 120,       // CC 40
+            shapeType: 0,        // CC 41
+        };
+        
+        // Animation variables
+        let time = 0;
+        let angle = 0;
+        let pulse = 0;
+        
+        // MIDI Setup
+        const midiStatusEl = document.getElementById('midi-status');
+        const midiButton = document.getElementById('midi-button');
+        const messageEl = document.getElementById('message');
+        
+        // CC value display elements
+        const ccValueElements = {
+            35: document.getElementById('cc35-value'),
+            36: document.getElementById('cc36-value'),
+            37: document.getElementById('cc37-value'),
+            38: document.getElementById('cc38-value'),
+            39: document.getElementById('cc39-value'),
+            40: document.getElementById('cc40-value'),
+            41: document.getElementById('cc41-value')
+        };
+        
+        // MIDI access request
+        midiButton.addEventListener('click', requestMIDIAccess);
+        
+        function requestMIDIAccess() {
+            if (navigator.requestMIDIAccess) {
+                navigator.requestMIDIAccess()
+                    .then(onMIDISuccess, onMIDIFailure);
+                messageEl.textContent = "Waiting for MIDI access...";
+            } else {
+                messageEl.textContent = "WebMIDI not supported in this browser.";
+            }
+        }
+        
+        function onMIDISuccess(midiAccess) {
+            midiStatusEl.classList.add('connected');
+            messageEl.textContent = "MIDI connected! Use CCs 35-41 to control visuals.";
+            
+            // Listen to MIDI input
+            const inputs = midiAccess.inputs.values();
+            for (let input = inputs.next(); input && !input.done; input = inputs.next()) {
+                input.value.onmidimessage = onMIDIMessage;
+            }
+            
+            midiAccess.onstatechange = function(e) {
+                if (e.port.state === 'connected') {
+                    midiStatusEl.classList.add('connected');
+                    messageEl.textContent = "MIDI device connected!";
+                } else {
+                    midiStatusEl.classList.remove('connected');
+                    messageEl.textContent = "MIDI device disconnected!";
+                }
+            };
+        }
+        
+        function onMIDIFailure(msg) {
+            messageEl.textContent = "Failed to get MIDI access: " + msg;
+        }
+        
+        function onMIDIMessage(message) {
+            // Check if it's a Control Change message (0xB0)
+            if ((message.data[0] & 0xF0) === 0xB0) {
+                const channel = message.data[0] & 0x0F;
+                const ccNumber = message.data[1];
+                const value = message.data[2];
+                
+                // Update controls based on CC numbers 35-41
+                switch (ccNumber) {
+                    case 35:
+                        controls.rotationSpeed = value / 127 * 2; // 0-2
+                        ccValueElements[35].textContent = value;
+                        break;
+                    case 36:
+                        controls.gridSize = 5 + (value / 127 * 25); // 5-30
+                        ccValueElements[36].textContent = value;
+                        break;
+                    case 37:
+                        controls.pulseRate = value / 127 * 2; // 0-2
+                        ccValueElements[37].textContent = value;
+                        break;
+                    case 38:
+                        controls.lineWidth = 0.5 + (value / 127 * 5); // 0.5-5.5
+                        ccValueElements[38].textContent = value;
+                        break;
+                    case 39:
+                        controls.perspective = 0.1 + (value / 127 * 1.5); // 0.1-1.6
+                        ccValueElements[39].textContent = value;
+                        break;
+                    case 40:
+                        controls.colorHue = value / 127 * 360; // 0-360
+                        ccValueElements[40].textContent = value;
+                        break;
+                    case 41:
+                        controls.shapeType = Math.floor(value / 32); // 0-3 (4 shape types)
+                        ccValueElements[41].textContent = value;
+                        break;
+                }
+            }
+        }
+        
+        // Animation functions
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Clear canvas
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Update time and angles
+            time += 0.01;
+            angle += 0.01 * controls.rotationSpeed;
+            pulse = Math.sin(time * controls.pulseRate) * 0.5 + 0.5;
+            
+            // Set line style based on controls
+            ctx.lineWidth = controls.lineWidth;
+            
+            // Create base color from hue
+            const hue = controls.colorHue;
+            const baseColor = `hsl(${hue}, 100%, 50%)`;
+            
+            // Set line stroke color
+            ctx.strokeStyle = baseColor;
+            
+            // Draw the 3D shapes
+            drawShape();
+        }
+        
+        function drawShape() {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const size = Math.min(canvas.width, canvas.height) * 0.4;
+            const count = Math.round(controls.gridSize);
+            
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            
+            // Choose shape based on shapeType control
+            switch (controls.shapeType) {
+                case 0:
+                    drawGrid(size, count);
+                    break;
+                case 1:
+                    drawCube(size);
+                    break;
+                case 2:
+                    drawSphere(size, count);
+                    break;
+                case 3:
+                    drawTorus(size, count);
+                    break;
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawGrid(size, count) {
+            const spacing = size * 2 / count;
+            
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // 3D rotations
+            ctx.rotate(angle);
+            
+            // Vertical lines
+            for (let i = -count / 2; i <= count / 2; i++) {
+                const x = i * spacing;
+                
+                // Perspective effect - lines get closer together in the distance
+                const perspective = Math.pow(Math.abs(i / (count / 2)), controls.perspective);
+                const alphaFade = 1 - perspective * 0.7;
+                
+                ctx.beginPath();
+                ctx.strokeStyle = `hsla(${controls.colorHue}, 100%, 50%, ${alphaFade})`;
+                ctx.moveTo(x, -pulseSize);
+                ctx.lineTo(x, pulseSize);
+                ctx.stroke();
+            }
+            
+            // Horizontal lines
+            for (let i = -count / 2; i <= count / 2; i++) {
+                const y = i * spacing;
+                
+                // Perspective effect
+                const perspective = Math.pow(Math.abs(i / (count / 2)), controls.perspective);
+                const alphaFade = 1 - perspective * 0.7;
+                
+                ctx.beginPath();
+                ctx.strokeStyle = `hsla(${controls.colorHue}, 100%, 50%, ${alphaFade})`;
+                ctx.moveTo(-pulseSize, y);
+                ctx.lineTo(pulseSize, y);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawCube(size) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // 3D rotations
+            ctx.rotate(angle);
+            ctx.scale(1, controls.perspective); // Apply perspective squashing
+            
+            // Draw a 3D wireframe cube
+            const vertices = [
+                [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+                [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+            ];
+            
+            const edges = [
+                [0, 1], [1, 2], [2, 3], [3, 0], // bottom face
+                [4, 5], [5, 6], [6, 7], [7, 4], // top face
+                [0, 4], [1, 5], [2, 6], [3, 7]  // connecting edges
+            ];
+            
+            // Transform vertices with rotation
+            const transformedVertices = vertices.map(v => {
+                // Apply rotation around Y axis
+                const cosY = Math.cos(angle);
+                const sinY = Math.sin(angle);
+                
+                // Apply rotation around X axis
+                const cosX = Math.cos(angle * 0.6);
+                const sinX = Math.sin(angle * 0.6);
+                
+                // Y-axis rotation
+                const x1 = v[0] * cosY - v[2] * sinY;
+                const z1 = v[0] * sinY + v[2] * cosY;
+                
+                // X-axis rotation
+                const y2 = v[1] * cosX - z1 * sinX;
+                const z2 = v[1] * sinX + z1 * cosX;
+                
+                return [
+                    x1 * pulseSize,
+                    y2 * pulseSize,
+                    z2 // z coordinate for depth calculation
+                ];
+            });
+            
+            // Draw edges
+            for (let [i, j] of edges) {
+                const v1 = transformedVertices[i];
+                const v2 = transformedVertices[j];
+                
+                // Calculate depth for color intensity
+                const depth1 = v1[2] + 1; // normalize to 0-2 range
+                const depth2 = v2[2] + 1;
+                const avgDepth = (depth1 + depth2) / 4; // normalize to 0-1 range
+                
+                // Adjust color based on depth
+                ctx.beginPath();
+                ctx.strokeStyle = `hsla(${controls.colorHue}, 100%, ${50 + avgDepth * 20}%, ${1 - avgDepth * 0.5})`;
+                ctx.moveTo(v1[0], v1[1]);
+                ctx.lineTo(v2[0], v2[1]);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawSphere(size, count) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            
+            ctx.save();
+            
+            // 3D rotations
+            ctx.rotate(angle);
+            
+            // Longitude and latitude
+            const segments = Math.max(8, Math.floor(count / 2));
+            
+            // Draw longitude lines (vertical circles)
+            for (let i = 0; i < segments; i++) {
+                const longitude = (i / segments) * Math.PI;
+                
+                ctx.beginPath();
+                for (let j = 0; j <= 100; j++) {
+                    const latitude = (j / 100) * Math.PI * 2;
+                    
+                    const x = pulseSize * Math.sin(longitude) * Math.cos(latitude);
+                    const y = pulseSize * Math.cos(longitude);
+                    
+                    if (j === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            // Draw latitude lines (horizontal circles)
+            for (let i = 1; i < segments; i++) {
+                const latitude = (i / segments) * Math.PI;
+                const radius = Math.sin(latitude);
+                const y = Math.cos(latitude) * pulseSize;
+                
+                ctx.beginPath();
+                for (let j = 0; j <= 100; j++) {
+                    const angle = (j / 100) * Math.PI * 2;
+                    const x = radius * Math.cos(angle) * pulseSize;
+                    const z = radius * Math.sin(angle) * pulseSize;
+                    
+                    if (j === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawTorus(size, count) {
+            // Apply pulsing effect
+            const pulseSize = size * (0.8 + pulse * 0.3);
+            const innerRadius = pulseSize * 0.3;
+            const outerRadius = pulseSize * 0.7;
+            
+            const segments = Math.max(8, Math.floor(count / 2));
+            
+            ctx.save();
+            
+            // 3D rotations
+            ctx.rotate(angle);
+            ctx.scale(1, controls.perspective); // Apply perspective
+            
+            // Draw circular segments
+            for (let i = 0; i < segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                const cosTheta = Math.cos(theta);
+                const sinTheta = Math.sin(theta);
+                
+                ctx.beginPath();
+                for (let j = 0; j <= 50; j++) {
+                    const phi = (j / 50) * Math.PI * 2;
+                    const cosPhi = Math.cos(phi);
+                    const sinPhi = Math.sin(phi);
+                    
+                    const x = (outerRadius + innerRadius * cosPhi) * cosTheta;
+                    const y = innerRadius * sinPhi;
+                    const z = (outerRadius + innerRadius * cosPhi) * sinTheta;
+                    
+                    // Project 3D point to 2D
+                    const scale = 1 / (1 + z * 0.01);
+                    
+                    if (j === 0) {
+                        ctx.moveTo(x * scale, y * scale);
+                    } else {
+                        ctx.lineTo(x * scale, y * scale);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            // Draw radial segments
+            for (let i = 0; i < segments; i++) {
+                const phi = (i / segments) * Math.PI * 2;
+                const cosPhi = Math.cos(phi);
+                const sinPhi = Math.sin(phi);
+                
+                ctx.beginPath();
+                for (let j = 0; j <= 50; j++) {
+                    const theta = (j / 50) * Math.PI * 2;
+                    const cosTheta = Math.cos(theta);
+                    const sinTheta = Math.sin(theta);
+                    
+                    const x = (outerRadius + innerRadius * cosPhi) * cosTheta;
+                    const y = innerRadius * sinPhi;
+                    const z = (outerRadius + innerRadius * cosPhi) * sinTheta;
+                    
+                    // Project 3D point to 2D
+                    const scale = 1 / (1 + z * 0.01);
+                    
+                    if (j === 0) {
+                        ctx.moveTo(x * scale, y * scale);
+                    } else {
+                        ctx.lineTo(x * scale, y * scale);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>

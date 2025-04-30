@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retro Wireframe Visuals</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #000;
+    }
+    canvas {
+      display: block;
+    }
+    .controls {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      color: #0f0;
+      font-family: monospace;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border: 1px solid #0f0;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="visualizer"></canvas>
+  <div class="controls">
+    <div>CC 35: Shape Type</div>
+    <div>CC 36: Rotation Speed</div>
+    <div>CC 37: Scale/Size</div>
+    <div>CC 38: Grid Density</div>
+    <div>CC 39: Pulse Rate</div>
+    <div>CC 40: Color Hue</div>
+    <div>CC 41: Wireframe Thickness</div>
+    <div>CC 42: Perspective Depth</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('visualizer');
+    const ctx = canvas.getContext('2d');
+
+    // Set canvas to full window size
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    // Visual parameters controlled by MIDI
+    const params = {
+      shapeType: 0,      // CC 35: 0=cube, 1=sphere, 2=torus, etc.
+      rotationSpeed: 0.5, // CC 36: 0-1
+      scale: 0.5,         // CC 37: 0-1
+      gridDensity: 0.5,   // CC 38: 0-1
+      pulseRate: 0.5,     // CC 39: 0-1
+      colorHue: 0.5,      // CC 40: 0-1
+      lineThickness: 1,   // CC 41: 0-127 mapped to 1-10
+      perspectiveDepth: 0.5 // CC 42: 0-1
+    };
+
+    // Wireframe objects definitions
+    const shapes = [
+      // Cube (vertices and edges)
+      {
+        vertices: [
+          [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+          [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+        ],
+        edges: [
+          [0, 1], [1, 2], [2, 3], [3, 0],
+          [4, 5], [5, 6], [6, 7], [7, 4],
+          [0, 4], [1, 5], [2, 6], [3, 7]
+        ]
+      },
+      // Pyramid
+      {
+        vertices: [
+          [0, 1, 0], [-1, -1, -1], [1, -1, -1],
+          [1, -1, 1], [-1, -1, 1]
+        ],
+        edges: [
+          [0, 1], [0, 2], [0, 3], [0, 4],
+          [1, 2], [2, 3], [3, 4], [4, 1]
+        ]
+      },
+      // Octahedron
+      {
+        vertices: [
+          [0, 1, 0], [1, 0, 0], [0, 0, 1],
+          [-1, 0, 0], [0, 0, -1], [0, -1, 0]
+        ],
+        edges: [
+          [0, 1], [0, 2], [0, 3], [0, 4],
+          [5, 1], [5, 2], [5, 3], [5, 4],
+          [1, 2], [2, 3], [3, 4], [4, 1]
+        ]
+      }
+    ];
+
+    // Animation variables
+    let time = 0;
+    let rotationX = 0;
+    let rotationY = 0;
+    let rotationZ = 0;
+    let pulse = 0;
+
+    // MIDI setup
+    if (navigator.requestMIDIAccess) {
+      navigator.requestMIDIAccess()
+        .then(onMIDISuccess, onMIDIFailure);
+    }
+
+    function onMIDISuccess(midiAccess) {
+      console.log("MIDI access obtained");
+      const inputs = midiAccess.inputs.values();
+      
+      // Connect to all available inputs
+      for (let input = inputs.next(); input && !input.done; input = inputs.next()) {
+        input.value.onmidimessage = onMIDIMessage;
+        console.log("Connected to MIDI input:", input.value.name);
+      }
+    }
+
+    function onMIDIFailure(error) {
+      console.error("Could not access MIDI devices:", error);
+    }
+
+    function onMIDIMessage(message) {
+      const [command, note, velocity] = message.data;
+      
+      // Check if it's a Control Change message (0xB0)
+      if ((command & 0xF0) === 0xB0) {
+        const normalizedValue = velocity / 127;
+        
+        // Map CC numbers to our parameters
+        switch(note) {
+          case 35:
+            params.shapeType = Math.floor(normalizedValue * shapes.length);
+            break;
+          case 36:
+            params.rotationSpeed = normalizedValue * 2;
+            break;
+          case 37:
+            params.scale = 0.2 + normalizedValue * 1.8; // Scale from 0.2 to 2.0
+            break;
+          case 38:
+            params.gridDensity = normalizedValue;
+            break;
+          case 39:
+            params.pulseRate = normalizedValue * 2;
+            break;
+          case 40:
+            params.colorHue = normalizedValue;
+            break;
+          case 41:
+            params.lineThickness = 1 + Math.floor(normalizedValue * 9);
+            break;
+          case 42:
+            params.perspectiveDepth = 0.2 + normalizedValue * 1.8;
+            break;
+        }
+      }
+    }
+
+    // 3D projection function
+    function project3D(point, scale) {
+      const depth = params.perspectiveDepth * 800;
+      const z = point[2] * scale + depth;
+      
+      // Perspective projection
+      const factor = depth / z;
+      const x = point[0] * scale * factor;
+      const y = point[1] * scale * factor;
+      
+      return {
+        x: canvas.width / 2 + x,
+        y: canvas.height / 2 + y,
+        z: z
+      };
+    }
+
+    // Get current shape based on shapeType parameter
+    function getCurrentShape() {
+      return shapes[params.shapeType % shapes.length];
+    }
+
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      // Clear canvas
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      time += 0.01;
+      pulse = 1 + Math.sin(time * params.pulseRate * 5) * 0.2;
+      
+      // Update rotation
+      rotationX += 0.01 * params.rotationSpeed;
+      rotationY += 0.015 * params.rotationSpeed;
+      rotationZ += 0.007 * params.rotationSpeed;
+      
+      // Calculate base scale based on canvas size and user parameter
+      const baseScale = Math.min(canvas.width, canvas.height) / 4 * params.scale;
+      const currentScale = baseScale * pulse;
+      
+      // Get current shape
+      const shape = getCurrentShape();
+      
+      // Color based on hue parameter
+      const hue = (params.colorHue * 360) % 360;
+      
+      // Draw the wireframe
+      ctx.lineWidth = params.lineThickness;
+      ctx.strokeStyle = `hsl(${hue}, 100%, 50%)`;
+      
+      // Draw the edges
+      for (let edge of shape.edges) {
+        const v1 = shape.vertices[edge[0]];
+        const v2 = shape.vertices[edge[1]];
+        
+        // Rotate points
+        const v1Rotated = rotatePoint(v1, rotationX, rotationY, rotationZ);
+        const v2Rotated = rotatePoint(v2, rotationX, rotationY, rotationZ);
+        
+        // Project to 2D
+        const p1 = project3D(v1Rotated, currentScale);
+        const p2 = project3D(v2Rotated, currentScale);
+        
+        // Draw line
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+      
+      // Draw grid if gridDensity > 0
+      if (params.gridDensity > 0) {
+        drawGrid(currentScale);
+      }
+    }
+
+    // Function to rotate a point in 3D space
+    function rotatePoint(point, rotX, rotY, rotZ) {
+      let x = point[0];
+      let y = point[1];
+      let z = point[2];
+      
+      // Rotate around X axis
+      let temp1 = y;
+      let temp2 = z;
+      y = temp1 * Math.cos(rotX) - temp2 * Math.sin(rotX);
+      z = temp1 * Math.sin(rotX) + temp2 * Math.cos(rotX);
+      
+      // Rotate around Y axis
+      temp1 = x;
+      temp2 = z;
+      x = temp1 * Math.cos(rotY) + temp2 * Math.sin(rotY);
+      z = -temp1 * Math.sin(rotY) + temp2 * Math.cos(rotY);
+      
+      // Rotate around Z axis
+      temp1 = x;
+      temp2 = y;
+      x = temp1 * Math.cos(rotZ) - temp2 * Math.sin(rotZ);
+      y = temp1 * Math.sin(rotZ) + temp2 * Math.cos(rotZ);
+      
+      return [x, y, z];
+    }
+
+    // Draw background grid
+    function drawGrid(scale) {
+      const gridSize = 20;
+      const gridExtent = 10;
+      const gridStep = gridExtent * 2 / gridSize;
+      
+      ctx.strokeStyle = `hsla(${params.colorHue * 360}, 100%, 50%, ${params.gridDensity * 0.4})`;
+      ctx.lineWidth = params.lineThickness * 0.5;
+      
+      // Horizontal grid lines
+      for (let i = -gridExtent; i <= gridExtent; i += gridStep) {
+        const p1 = project3D(rotatePoint([-gridExtent, i, 0], rotationX, rotationY, rotationZ), scale);
+        const p2 = project3D(rotatePoint([gridExtent, i, 0], rotationX, rotationY, rotationZ), scale);
+        
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+      
+      // Vertical grid lines
+      for (let i = -gridExtent; i <= gridExtent; i += gridStep) {
+        const p1 = project3D(rotatePoint([i, -gridExtent, 0], rotationX, rotationY, rotationZ), scale);
+        const p2 = project3D(rotatePoint([i, gridExtent, 0], rotationX, rotationY, rotationZ), scale);
+        
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      }
+    }
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+
+    // Start animation
+    animate();
+  </script>
+</body>
+</html></html>

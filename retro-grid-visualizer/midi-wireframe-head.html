@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Controlled Wireframe Head</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: monospace;
+            color: #0f0;
+        }
+        canvas {
+            display: block;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border: 1px solid #0f0;
+            z-index: 10;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 16px;
+        }
+        .status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: red;
+            border-radius: 50%;
+            margin-left: 10px;
+        }
+        .connected {
+            background-color: #0f0;
+        }
+        .cc-value {
+            display: inline-block;
+            width: 30px;
+            text-align: right;
+        }
+        button {
+            background-color: #000;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-family: monospace;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0f0;
+            color: #000;
+        }
+        #message {
+            margin-top: 10px;
+            color: #0f0;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="controls">
+        <div class="control-group">
+            <h2>MIDI Status <span id="midi-status" class="status"></span></h2>
+            <div id="message">Connect a MIDI controller and use CCs 34-45</div>
+            <button id="midi-button">Request MIDI Access</button>
+        </div>
+        
+        <div class="control-group">
+            <h2>Facial Features Controls:</h2>
+            <div>CC 34: Eye Width <span id="cc34-value" class="cc-value">0</span></div>
+            <div>CC 35: Eye Height <span id="cc35-value" class="cc-value">0</span></div>
+            <div>CC 36: Eyebrow Angle <span id="cc36-value" class="cc-value">0</span></div>
+            <div>CC 37: Mouth Width <span id="cc37-value" class="cc-value">0</span></div>
+            <div>CC 38: Mouth Expression <span id="cc38-value" class="cc-value">0</span></div>
+            <div>CC 39: Nose Size <span id="cc39-value" class="cc-value">0</span></div>
+            <div>CC 40: Jaw Width <span id="cc40-value" class="cc-value">0</span></div>
+            <div>CC 41: Detail Level <span id="cc41-value" class="cc-value">0</span></div>
+            <div>CC 42-45: Head Tilt Controls:</div>
+            <div>&nbsp;&nbsp;CC 42: Front Tilt <span id="cc42-value" class="cc-value">0</span></div>
+            <div>&nbsp;&nbsp;CC 43: Back Tilt <span id="cc43-value" class="cc-value">0</span></div>
+            <div>&nbsp;&nbsp;CC 44: Right Tilt <span id="cc44-value" class="cc-value">0</span></div>
+            <div>&nbsp;&nbsp;CC 45: Left Tilt <span id="cc45-value" class="cc-value">0</span></div>
+        </div>
+    </div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size to window size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // MIDI Controls (initial values)
+        const controls = {
+            eyeWidth: 0.5,       // CC 34
+            eyeHeight: 0.5,      // CC 35
+            eyebrowAngle: 0.5,   // CC 36
+            mouthWidth: 0.5,     // CC 37
+            mouthExpression: 0.5, // CC 38
+            noseSize: 0.5,       // CC 39
+            jawWidth: 0.5,       // CC 40
+            detailLevel: 0.5,    // CC 41
+            tiltFront: 0,        // CC 42
+            tiltBack: 0,         // CC 43
+            tiltRight: 0,        // CC 44
+            tiltLeft: 0,         // CC 45
+        };
+        
+        // Animation variables
+        let time = 0;
+        let angle = 0;
+        let pulse = 0;
+        
+        // MIDI Setup
+        const midiStatusEl = document.getElementById('midi-status');
+        const midiButton = document.getElementById('midi-button');
+        const messageEl = document.getElementById('message');
+        
+        // CC value display elements
+        const ccValueElements = {
+            34: document.getElementById('cc34-value'),
+            35: document.getElementById('cc35-value'),
+            36: document.getElementById('cc36-value'),
+            37: document.getElementById('cc37-value'),
+            38: document.getElementById('cc38-value'),
+            39: document.getElementById('cc39-value'),
+            40: document.getElementById('cc40-value'),
+            41: document.getElementById('cc41-value'),
+            42: document.getElementById('cc42-value'),
+            43: document.getElementById('cc43-value'),
+            44: document.getElementById('cc44-value'),
+            45: document.getElementById('cc45-value')
+        };
+        
+        // MIDI access request
+        midiButton.addEventListener('click', requestMIDIAccess);
+        
+        function requestMIDIAccess() {
+            if (navigator.requestMIDIAccess) {
+                navigator.requestMIDIAccess()
+                    .then(onMIDISuccess, onMIDIFailure);
+                messageEl.textContent = "Waiting for MIDI access...";
+            } else {
+                messageEl.textContent = "WebMIDI not supported in this browser.";
+            }
+        }
+        
+        function onMIDISuccess(midiAccess) {
+            midiStatusEl.classList.add('connected');
+            messageEl.textContent = "MIDI connected! Use CCs 34-45 to control the wireframe head.";
+            
+            // Listen to MIDI input
+            const inputs = midiAccess.inputs.values();
+            for (let input = inputs.next(); input && !input.done; input = inputs.next()) {
+                input.value.onmidimessage = onMIDIMessage;
+            }
+            
+            midiAccess.onstatechange = function(e) {
+                if (e.port.state === 'connected') {
+                    midiStatusEl.classList.add('connected');
+                    messageEl.textContent = "MIDI device connected!";
+                } else {
+                    midiStatusEl.classList.remove('connected');
+                    messageEl.textContent = "MIDI device disconnected!";
+                }
+            };
+        }
+        
+        function onMIDIFailure(msg) {
+            messageEl.textContent = "Failed to get MIDI access: " + msg;
+        }
+        
+        function onMIDIMessage(message) {
+            // Check if it's a Control Change message (0xB0)
+            if ((message.data[0] & 0xF0) === 0xB0) {
+                const channel = message.data[0] & 0x0F;
+                const ccNumber = message.data[1];
+                const value = message.data[2];
+                
+                // Update controls based on CC numbers 34-45
+                switch (ccNumber) {
+                    case 34:
+                        controls.eyeWidth = value / 127; // 0-1
+                        ccValueElements[34].textContent = value;
+                        break;
+                    case 35:
+                        controls.eyeHeight = value / 127; // 0-1
+                        ccValueElements[35].textContent = value;
+                        break;
+                    case 36:
+                        controls.eyebrowAngle = value / 127; // 0-1
+                        ccValueElements[36].textContent = value;
+                        break;
+                    case 37:
+                        controls.mouthWidth = value / 127; // 0-1
+                        ccValueElements[37].textContent = value;
+                        break;
+                    case 38:
+                        controls.mouthExpression = value / 127; // 0-1
+                        ccValueElements[38].textContent = value;
+                        break;
+                    case 39:
+                        controls.noseSize = value / 127; // 0-1
+                        ccValueElements[39].textContent = value;
+                        break;
+                    case 40:
+                        controls.jawWidth = value / 127; // 0-1
+                        ccValueElements[40].textContent = value;
+                        break;
+                    case 41:
+                        controls.detailLevel = value / 127; // 0-1
+                        ccValueElements[41].textContent = value;
+                        break;
+                    case 42:
+                        controls.tiltFront = value / 127; // 0-1
+                        ccValueElements[42].textContent = value;
+                        break;
+                    case 43:
+                        controls.tiltBack = value / 127; // 0-1
+                        ccValueElements[43].textContent = value;
+                        break;
+                    case 44:
+                        controls.tiltRight = value / 127; // 0-1
+                        ccValueElements[44].textContent = value;
+                        break;
+                    case 45:
+                        controls.tiltLeft = value / 127; // 0-1
+                        ccValueElements[45].textContent = value;
+                        break;
+                }
+            }
+        }
+        
+        // Animation functions
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Clear canvas
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Update time and angles
+            time += 0.01;
+            angle += 0.005; // Slow automatic rotation
+            pulse = Math.sin(time * 0.5) * 0.5 + 0.5; // Subtle pulsing effect
+            
+            // Draw the head
+            drawHead();
+        }
+        
+        function drawHead() {
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const size = Math.min(canvas.width, canvas.height) * 0.35;
+            
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            
+            // Apply head tilt controls using accelerometer values
+            const tiltX = (controls.tiltRight - controls.tiltLeft) * Math.PI * 0.25; // +/- 45 degrees
+            const tiltY = (controls.tiltBack - controls.tiltFront) * Math.PI * 0.25;
+            
+            // Rotate head - combine automatic rotation with tilt
+            ctx.rotate(angle + tiltX);
+            
+            // Set line style
+            ctx.lineWidth = 1 + controls.detailLevel;
+            ctx.strokeStyle = `hsl(${120 + pulse * 30}, 100%, 50%)`;
+            
+            // Draw head shape
+            drawHeadShape(size, tiltY);
+            
+            // Draw facial features
+            drawEyes(size, tiltY);
+            drawEyebrows(size, tiltY);
+            drawNose(size, tiltY);
+            drawMouth(size, tiltY);
+            
+            // Draw details based on detail level
+            if (controls.detailLevel > 0.3) {
+                drawExtraDetails(size, tiltY);
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawHeadShape(size, tiltY) {
+            // Create head shape - elliptical but with jaw control
+            const headWidth = size * (0.7 + controls.jawWidth * 0.3);
+            const headHeight = size * 1.2;
+            
+            // Perspective scaling based on tilt
+            const perspectiveScale = 1 - Math.abs(tiltY) * 0.3;
+            
+            ctx.save();
+            ctx.scale(perspectiveScale, 1); // Horizontal scaling for perspective
+            
+            // Draw head outline
+            ctx.beginPath();
+            
+            // Top part of head (elliptical)
+            for (let angle = 0; angle <= Math.PI; angle += 0.1) {
+                const x = Math.cos(angle) * headWidth;
+                const y = Math.sin(angle) * headHeight * 0.8 - headHeight * 0.3;
+                
+                if (angle === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            
+            // Jaw shape (controlled by jawWidth)
+            const jawWidth = headWidth * (0.7 + controls.jawWidth * 0.3);
+            const jawOffset = headHeight * 0.5;
+            
+            // Right side of jaw
+            ctx.lineTo(jawWidth * 0.8, jawOffset * 0.3);
+            ctx.lineTo(jawWidth * 0.6, jawOffset * 0.6);
+            ctx.lineTo(jawWidth * 0.3, jawOffset * 0.8);
+            ctx.lineTo(0, jawOffset); // Bottom of chin
+            
+            // Left side of jaw (mirror of right side)
+            ctx.lineTo(-jawWidth * 0.3, jawOffset * 0.8);
+            ctx.lineTo(-jawWidth * 0.6, jawOffset * 0.6);
+            ctx.lineTo(-jawWidth * 0.8, jawOffset * 0.3);
+            ctx.lineTo(-headWidth, 0); // Back to start
+            
+            ctx.stroke();
+            ctx.restore();
+        }
+        
+        function drawEyes(size, tiltY) {
+            const eyeSpacing = size * 0.25;
+            const eyeWidth = size * 0.2 * (0.5 + controls.eyeWidth * 0.5);
+            const eyeHeight = size * 0.1 * (0.5 + controls.eyeHeight * 0.5);
+            const eyeY = -size * 0.1;
+            
+            // Apply perspective for tilt
+            const perspectiveScale = 1 - Math.abs(tiltY) * 0.3;
+            
+            ctx.save();
+            ctx.scale(perspectiveScale, 1);
+            
+            // Draw left eye
+            ctx.beginPath();
+            ctx.ellipse(-eyeSpacing, eyeY, eyeWidth, eyeHeight, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Draw right eye
+            ctx.beginPath();
+            ctx.ellipse(eyeSpacing, eyeY, eyeWidth, eyeHeight, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Draw pupils if detail level is high enough
+            if (controls.detailLevel > 0.4) {
+                const pupilSize = size * 0.05 * (0.8 + pulse * 0.2);
+                
+                // Left pupil
+                ctx.beginPath();
+                ctx.arc(-eyeSpacing, eyeY, pupilSize, 0, Math.PI * 2);
+                ctx.stroke();
+                
+                // Right pupil
+                ctx.beginPath();
+                ctx.arc(eyeSpacing, eyeY, pupilSize, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawEyebrows(size, tiltY) {
+            const eyeSpacing = size * 0.25;
+            const eyebrowY = -size * 0.25;
+            const eyebrowWidth = size * 0.25;
+            const eyebrowAngle = (controls.eyebrowAngle - 0.5) * Math.PI * 0.2;
+            
+            // Apply perspective for tilt
+            const perspectiveScale = 1 - Math.abs(tiltY) * 0.3;
+            
+            ctx.save();
+            ctx.scale(perspectiveScale, 1);
+            
+            // Draw left eyebrow
+            ctx.beginPath();
+            ctx.moveTo(-eyeSpacing - eyebrowWidth, eyebrowY);
+            ctx.lineTo(-eyeSpacing + eyebrowWidth, eyebrowY + eyebrowAngle * size * 0.1);
+            ctx.stroke();
+            
+            // Draw right eyebrow
+            ctx.beginPath();
+            ctx.moveTo(eyeSpacing - eyebrowWidth, eyebrowY + eyebrowAngle * size * 0.1);
+            ctx.lineTo(eyeSpacing + eyebrowWidth, eyebrowY);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+        
+        function drawNose(size, tiltY) {
+            const noseWidth = size * 0.1 * controls.noseSize;
+            const noseHeight = size * 0.2 * controls.noseSize;
+            const noseY = 0;
+            
+            // Apply perspective for tilt
+            const perspectiveScale = 1 - Math.abs(tiltY) * 0.3;
+            
+            ctx.save();
+            ctx.scale(perspectiveScale, 1);
+            
+            // Draw nose bridge
+            ctx.beginPath();
+            ctx.moveTo(0, -size * 0.15);
+            ctx.lineTo(0, noseY);
+            ctx.stroke();
+            
+            // Draw nose base
+            ctx.beginPath();
+            ctx.moveTo(-noseWidth, noseY);
+            ctx.lineTo(0, noseY + noseHeight * 0.5);
+            ctx.lineTo(noseWidth, noseY);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+        
+        function drawMouth(size, tiltY) {
+            const mouthWidth = size * 0.4 * (0.5 + controls.mouthWidth * 0.5);
+            const mouthY = size * 0.3;
+            const mouthExpression = (controls.mouthExpression - 0.5) * size * 0.2;
+            
+            // Apply perspective for tilt
+            const perspectiveScale = 1 - Math.abs(tiltY) * 0.3;
+            
+            ctx.save();
+            ctx.scale(perspectiveScale, 1);
+            
+            // Draw mouth with expression based on mouthExpression value
+            ctx.beginPath();
+            ctx.moveTo(-mouthWidth, mouthY);
+            
+            // Control points for the curve - adjusted by expression
+            const cpX1 = -mouthWidth * 0.5;
+            const cpY1 = mouthY + mouthExpression;
+            const cpX2 = mouthWidth * 0.5;
+            const cpY2 = mouthY + mouthExpression;
+            
+            ctx.bezierCurveTo(cpX1, cpY1, cpX2, cpY2, mouthWidth, mouthY);
+            ctx.stroke();
+            
+            // If detail level is high, add more mouth details
+            if (controls.detailLevel > 0.6) {
+                // Draw center line of lips
+                ctx.beginPath();
+                ctx.moveTo(-mouthWidth * 0.8, mouthY + mouthExpression * 0.7);
+                ctx.bezierCurveTo(
+                    -mouthWidth * 0.4, mouthY + mouthExpression * 1.1,
+                    mouthWidth * 0.4, mouthY + mouthExpression * 1.1,
+                    mouthWidth * 0.8, mouthY + mouthExpression * 0.7
+                );
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawExtraDetails(size, tiltY) {
+            const detailLevel = controls.detailLevel;
+            
+            // Apply perspective for tilt
+            const perspectiveScale = 1 - Math.abs(tiltY) * 0.3;
+            
+            ctx.save();
+            ctx.scale(perspectiveScale, 1);
+            
+            // Draw ears if detail level is medium or higher
+            if (detailLevel > 0.4) {
+                const headWidth = size * (0.7 + controls.jawWidth * 0.3);
+                const earSize = size * 0.15 * detailLevel;
+                
+                // Left ear
+                ctx.beginPath();
+                ctx.moveTo(-headWidth, -size * 0.1);
+                ctx.bezierCurveTo(
+                    -headWidth - earSize, -size * 0.2,
+                    -headWidth - earSize, size * 0.1,
+                    -headWidth, size * 0.2
+                );
+                ctx.stroke();
+                
+                // Right ear
+                ctx.beginPath();
+                ctx.moveTo(headWidth, -size * 0.1);
+                ctx.bezierCurveTo(
+                    headWidth + earSize, -size * 0.2,
+                    headWidth + earSize, size * 0.1,
+                    headWidth, size * 0.2
+                );
+                ctx.stroke();
+            }
+            
+            // Draw hair if detail level is high
+            if (detailLevel > 0.7) {
+                const headWidth = size * (0.7 + controls.jawWidth * 0.3);
+                const headHeight = size * 1.2;
+                
+                // Top hair
+                ctx.beginPath();
+                for (let angle = 0; angle <= Math.PI; angle += 0.1) {
+                    const hairLength = size * 0.1 * (0.5 + Math.sin(angle * 5 + time) * 0.5);
+                    const x = Math.cos(angle) * (headWidth + hairLength);
+                    const y = Math.sin(angle) * (headHeight * 0.8) - headHeight * 0.3 - hairLength;
+                    
+                    if (angle === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+            }
+            
+            // Draw neck if detail level is medium or higher
+            if (detailLevel > 0.5) {
+                const jawWidth = size * (0.7 + controls.jawWidth * 0.3) * 0.3;
+                const neckHeight = size * 0.4;
+                
+                // Neck
+                ctx.beginPath();
+                ctx.moveTo(-jawWidth, size * 0.5);
+                ctx.lineTo(-jawWidth, size * 0.5 + neckHeight);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(jawWidth, size * 0.5);
+                ctx.lineTo(jawWidth, size * 0.5 + neckHeight);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+        
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>
